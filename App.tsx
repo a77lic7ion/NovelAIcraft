@@ -11,6 +11,7 @@ import Settings from './components/Settings';
 import Review from './components/Review';
 import Auth from './components/Auth';
 import { updateAIConfig } from './aiService';
+import { dbStorage } from './storage';
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -26,9 +27,7 @@ const App: React.FC = () => {
     prefetch: true
   });
 
-  const saveTimeoutRef = useRef<number | null>(null);
-
-  // Load user session
+  // Load user session and basic settings
   useEffect(() => {
     const savedUser = localStorage.getItem('novel-craft-user');
     if (savedUser) setCurrentUser(JSON.parse(savedUser));
@@ -44,33 +43,14 @@ const App: React.FC = () => {
     if (savedHistory) setPromptHistory(JSON.parse(savedHistory));
   }, []);
 
-  // Load user-specific projects
+  // Load projects from IndexedDB when user is authenticated
   useEffect(() => {
     if (currentUser) {
-      const key = `novel-craft-projects-${currentUser.id}`;
-      const saved = localStorage.getItem(key);
-      if (saved) setProjects(JSON.parse(saved));
-      else setProjects([]);
+      dbStorage.getAllProjects(currentUser.id)
+        .then(setProjects)
+        .catch(err => console.error("Database load error:", err));
     }
   }, [currentUser]);
-
-  // Debounced Persistence
-  useEffect(() => {
-    if (currentUser && projects.length >= 0) {
-      if (saveTimeoutRef.current) window.clearTimeout(saveTimeoutRef.current);
-      
-      saveTimeoutRef.current = window.setTimeout(() => {
-        try {
-          localStorage.setItem(`novel-craft-projects-${currentUser.id}`, JSON.stringify(projects));
-        } catch (e) {
-          console.error("Storage Error:", e);
-        }
-      }, 1000); // 1 second debounce for saving
-    }
-    return () => {
-      if (saveTimeoutRef.current) window.clearTimeout(saveTimeoutRef.current);
-    };
-  }, [projects, currentUser]);
 
   const handleLogout = () => {
     setCurrentUser(null);
@@ -96,11 +76,19 @@ const App: React.FC = () => {
 
   const activeProject = projects.find(p => p.id === activeProjectId) || projects[0];
 
-  const updateProject = (updatedProject: Project) => {
+  const updateProject = async (updatedProject: Project) => {
+    // Optimistic UI update
     setProjects(prev => prev.map(p => p.id === updatedProject.id ? updatedProject : p));
+    
+    // Background DB save
+    try {
+      await dbStorage.saveProject(updatedProject);
+    } catch (e) {
+      console.error("Database save error:", e);
+    }
   };
 
-  const createNewProject = (title: string, genre: string, tags: string[]) => {
+  const createNewProject = async (title: string, genre: string, tags: string[]) => {
     const newProject: Project = {
       id: Math.random().toString(36).substr(2, 9),
       title: title || 'Untitled Project',
@@ -111,13 +99,25 @@ const App: React.FC = () => {
       codex: [],
       tags: tags || []
     };
-    setProjects(prev => [...prev, newProject]);
-    setActiveProjectId(newProject.id);
-    setCurrentView(View.MANUSCRIPT);
+    
+    try {
+      await dbStorage.saveProject(newProject);
+      setProjects(prev => [...prev, newProject]);
+      setActiveProjectId(newProject.id);
+      setCurrentView(View.MANUSCRIPT);
+    } catch (e) {
+      alert("Failed to create project in laboratory database.");
+    }
   };
 
-  const deleteProject = (id: string) => {
-    setProjects(prev => prev.filter(p => p.id !== id));
+  const deleteProject = async (id: string) => {
+    try {
+      await dbStorage.deleteProject(id);
+      setProjects(prev => prev.filter(p => p.id !== id));
+      if (activeProjectId === id) setActiveProjectId(null);
+    } catch (e) {
+      console.error("Delete error:", e);
+    }
   };
 
   return (

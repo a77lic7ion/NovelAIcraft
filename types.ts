@@ -39,6 +39,10 @@ export interface Project {
   acts: Act[];
   codex: CodexEntry[];
   tags: string[];
+  backSynopsis?: string;
+  frontCover?: string; // Base64
+  backCover?: string;  // Base64
+  printSize?: 'A4' | 'A5' | 'US Letter';
 }
 
 export interface Act {
@@ -54,6 +58,7 @@ export interface Scene {
   synopsis: string;
   status: 'Draft' | 'In Progress' | 'Done';
   wordCount: number;
+  image?: string; // Base64 image string
 }
 
 export interface CodexEntry {
@@ -64,6 +69,7 @@ export interface CodexEntry {
   details: string;
   notes: string;
   isLocked?: boolean;
+  image?: string; // Base64 image string
 }
 
 export interface ChatMessage {

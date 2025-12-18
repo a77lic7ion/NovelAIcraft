@@ -20,10 +20,10 @@ const Editor: React.FC<EditorProps> = ({ project, sceneId, onUpdate, onBack, his
   const [isGeneratingSynopsis, setIsGeneratingSynopsis] = useState(false);
   const [showAiModal, setShowAiModal] = useState(false);
   const [error, setError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const syncTimeoutRef = useRef<number | null>(null);
 
-  // Load scene data once when sceneId changes or first load
   useEffect(() => {
     const s = project.acts.flatMap(a => a.scenes).find(s => s.id === sceneId);
     if (s && (!scene || s.id !== scene.id)) {
@@ -32,29 +32,38 @@ const Editor: React.FC<EditorProps> = ({ project, sceneId, onUpdate, onBack, his
     }
   }, [sceneId, project]);
 
-  // Debounced Sync back to global project state
   const debouncedSync = (content: string, updates: Partial<Scene> = {}) => {
     if (syncTimeoutRef.current) window.clearTimeout(syncTimeoutRef.current);
     
     syncTimeoutRef.current = window.setTimeout(() => {
       if (!scene) return;
-      
       const wordCount = content.trim() ? content.split(/\s+/).length : 0;
       const updatedScene = { ...scene, content, wordCount, ...updates };
-      
       const updatedActs = project.acts.map(act => ({
         ...act,
         scenes: act.scenes.map(s => s.id === scene.id ? updatedScene : s)
       }));
-      
       onUpdate({ ...project, acts: updatedActs, lastEdited: Date.now() });
-    }, 500); // Sync every 500ms of silence
+    }, 500);
   };
 
   const handleContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const text = e.target.value;
     setLocalContent(text);
     debouncedSync(text);
+  };
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && scene) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64 = reader.result as string;
+        debouncedSync(localContent, { image: base64 });
+        setScene({ ...scene, image: base64 });
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const saveSceneTitleOrSynopsis = (updates: Partial<Scene>) => {
@@ -73,11 +82,10 @@ const Editor: React.FC<EditorProps> = ({ project, sceneId, onUpdate, onBack, his
     setIsGenerating(true);
     setError('');
     onPromptUse(aiPrompt);
-    
     try {
       const draft = await callAI(
-        `Draft the following for my scene in the novel "${project.title}": ${aiPrompt}`,
-        `You are a world-class novelist. Use immersive, high-quality prose. Current scene context: ${localContent.slice(-1000)}`
+        `Draft the following for my scene: ${aiPrompt}`,
+        `Context: ${localContent.slice(-1000)}`
       );
       if (draft) {
         const newContent = localContent + '\n\n' + draft;
@@ -87,31 +95,13 @@ const Editor: React.FC<EditorProps> = ({ project, sceneId, onUpdate, onBack, his
         setAiPrompt('');
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Draft generation failed.');
+      setError(e instanceof Error ? e.message : 'Failed.');
     } finally {
       setIsGenerating(false);
     }
   };
 
-  const handleGenerateSynopsis = async () => {
-    if (!localContent.trim()) return;
-    setIsGeneratingSynopsis(true);
-    try {
-      const result = await callAI(
-        `Generate a concise one-sentence synopsis for the following scene content: \n\n${localContent}`,
-        "You are an expert literary editor. Provide only the synopsis text without quotes or preamble."
-      );
-      if (result) {
-        saveSceneTitleOrSynopsis({ synopsis: result.trim() });
-      }
-    } catch (e) {
-      console.error("Failed to generate synopsis:", e);
-    } finally {
-      setIsGeneratingSynopsis(false);
-    }
-  };
-
-  if (!scene) return <div className="p-8 text-gray-500">Select a scene to start writing...</div>;
+  if (!scene) return <div className="p-8 text-gray-500">Loading scene...</div>;
 
   const currentWordCount = localContent.trim() ? localContent.split(/\s+/).length : 0;
 
@@ -119,154 +109,94 @@ const Editor: React.FC<EditorProps> = ({ project, sceneId, onUpdate, onBack, his
     <div className="flex-1 flex flex-col h-full bg-black relative">
       <header className="h-16 flex items-center justify-between px-6 border-b border-border-dark bg-surface-dark/95 backdrop-blur-md z-30 shrink-0">
         <div className="flex items-center gap-4">
-          <button onClick={onBack} className="p-2 -ml-2 rounded-lg hover:bg-surface-hover text-gray-500 hover:text-white transition-colors">
+          <button onClick={onBack} className="p-2 -ml-2 rounded-lg hover:bg-surface-hover text-gray-500">
             <span className="material-symbols-outlined">arrow_back</span>
           </button>
           <div className="h-5 w-px bg-border-dark"></div>
-          <nav className="flex items-center text-sm">
-            <span className="text-gray-500">Manuscript</span>
-            <span className="material-symbols-outlined text-[16px] text-gray-700 mx-1">chevron_right</span>
-            <span className="text-white font-medium">{scene.title}</span>
-          </nav>
+          <span className="text-white font-medium text-sm">{scene.title}</span>
         </div>
         <div className="flex items-center gap-2">
           <button 
-            onClick={() => setShowAiModal(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 rounded-lg font-bold text-sm transition-all shadow-lg shadow-primary/5"
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-2 px-4 py-2 bg-surface-dark border border-border-dark text-gray-400 hover:text-white rounded-lg font-bold text-sm transition-all"
           >
+            <span className="material-symbols-outlined text-[18px]">add_photo_alternate</span>
+            <span>Illustration</span>
+          </button>
+          <input type="file" ref={fileInputRef} hidden accept="image/*" onChange={handleImageUpload} />
+          <button onClick={() => setShowAiModal(true)} className="flex items-center gap-2 px-4 py-2 bg-primary/10 text-primary border border-primary/20 rounded-lg font-bold text-sm">
             <span className="material-symbols-outlined text-[18px]">auto_awesome</span>
             <span>AI Assist</span>
-          </button>
-          <button onClick={onBack} className="flex items-center gap-2 px-4 py-2 bg-primary hover:brightness-110 text-black rounded-lg font-bold text-sm transition-all">
-            <span className="material-symbols-outlined text-[18px]">check</span>
-            <span>Complete</span>
           </button>
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto w-full relative">
-        <div className="max-w-3xl mx-auto py-20 px-8 min-h-full flex flex-col gap-8 relative z-10">
-          <div className="flex flex-col gap-6">
-            <input 
-              className="bg-transparent text-5xl font-black text-white placeholder-zinc-800 border-none focus:ring-0 p-0 w-full tracking-tight"
-              value={scene.title}
-              onChange={(e) => saveSceneTitleOrSynopsis({ title: e.target.value })}
-              placeholder="Untitled Scene"
-            />
+      <div className="flex-1 overflow-y-auto w-full">
+        <div className="max-w-3xl mx-auto py-20 px-8 flex flex-col gap-10">
+          <input 
+            className="bg-transparent text-5xl font-black text-white border-none focus:ring-0 p-0 w-full tracking-tight"
+            value={scene.title}
+            onChange={(e) => saveSceneTitleOrSynopsis({ title: e.target.value })}
+            placeholder="Scene Title"
+          />
 
-            <div className="flex flex-col gap-2">
-              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest px-1 flex justify-between items-center">
-                <span>Synopsis</span>
-                <button 
-                  onClick={handleGenerateSynopsis}
-                  disabled={isGeneratingSynopsis || !localContent.trim()}
-                  className="text-primary hover:text-white transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed group"
-                >
-                  <span className={`material-symbols-outlined text-sm ${isGeneratingSynopsis ? 'animate-spin' : ''}`}>
-                    {isGeneratingSynopsis ? 'progress_activity' : 'auto_fix'}
-                  </span>
-                  <span className="text-[9px]">{isGeneratingSynopsis ? 'Generating...' : 'AI Generate'}</span>
-                </button>
-              </label>
-              <textarea 
-                className="bg-surface-dark border border-border-dark rounded-xl px-4 py-3 text-sm text-gray-300 focus:ring-1 focus:ring-primary focus:border-primary transition-all w-full resize-none min-h-[60px]"
-                value={scene.synopsis}
-                onChange={(e) => saveSceneTitleOrSynopsis({ synopsis: e.target.value })}
-                placeholder="Briefly describe what happens in this scene..."
-                rows={2}
-              />
+          {/* Scene Illustration - Resized for Print Context */}
+          {scene.image && (
+            <div className="w-full relative group">
+              <div className="p-4 bg-zinc-900/50 border border-zinc-800 rounded-3xl shadow-2xl">
+                <img src={scene.image} alt="Scene Illustration" className="w-full h-auto rounded-2xl grayscale hover:grayscale-0 transition-all duration-700 shadow-inner" />
+                <div className="mt-4 flex justify-between items-center text-[10px] text-zinc-500 font-bold uppercase tracking-[0.2em] px-2">
+                  <span>Plate No. {scene.id.slice(0, 4)}</span>
+                  <button onClick={() => { debouncedSync(localContent, { image: undefined }); setScene({...scene, image: undefined}); }} className="hover:text-red-500 transition-colors">Remove Plate</button>
+                </div>
+              </div>
             </div>
-          </div>
-          
+          )}
+
+          <textarea 
+            className="w-full bg-surface-dark border border-border-dark rounded-2xl px-5 py-4 text-sm text-gray-400 focus:ring-1 focus:ring-primary/40 resize-none font-medium italic"
+            value={scene.synopsis}
+            onChange={(e) => saveSceneTitleOrSynopsis({ synopsis: e.target.value })}
+            placeholder="One sentence synopsis..."
+            rows={1}
+          />
+
           <textarea
-            className="flex-1 bg-transparent border-none focus:ring-0 p-0 text-xl text-zinc-300 leading-relaxed font-serif min-h-[600px] resize-none selection:bg-primary/30 mt-4"
+            className="flex-1 bg-transparent border-none focus:ring-0 p-0 text-xl text-zinc-300 leading-relaxed font-serif min-h-[600px] resize-none"
             value={localContent}
             onChange={handleContentChange}
-            placeholder="Begin your masterpiece..."
+            placeholder="Write your story..."
           />
         </div>
       </div>
 
-      <footer className="h-12 border-t border-border-dark bg-surface-dark px-6 py-2 flex items-center justify-between shrink-0 text-[10px] font-bold uppercase tracking-widest text-gray-500">
-        <div className="flex items-center gap-8">
-          <span className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-sm">sticky_note_2</span>
-            {currentWordCount} Words
-          </span>
-          <span className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-sm">timer</span>
-            ${~~(currentWordCount / 200)}m Reading
-          </span>
-        </div>
+      <footer className="h-12 border-t border-border-dark bg-surface-dark px-6 flex items-center justify-between shrink-0 text-[10px] font-bold uppercase text-gray-500">
+        <span>{currentWordCount} Words</span>
         <div className="flex items-center gap-2">
-          <span className="animate-pulse w-1.5 h-1.5 rounded-full bg-primary"></span>
+          <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
           <span>Studio Active</span>
         </div>
       </footer>
 
       {showAiModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/90 backdrop-blur-md animate-in fade-in zoom-in duration-200">
-          <div className="bg-surface-dark border border-border-dark rounded-[2.5rem] shadow-[0_0_100px_rgba(43,238,121,0.05)] p-10 w-full max-w-2xl flex flex-col max-h-[90vh]">
-            <div className="flex items-center justify-between mb-8">
-              <div className="flex items-center gap-3">
-                <span className="material-symbols-outlined text-primary text-3xl">auto_awesome</span>
-                <h3 className="text-2xl font-bold text-white">Laboratory Assistant</h3>
-              </div>
-              <button onClick={() => setShowAiModal(false)} className="text-gray-500 hover:text-white transition-colors">
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto space-y-8 pr-2">
-              <div>
-                <label className="text-xs font-bold text-gray-400 uppercase tracking-widest block mb-3 px-1">Prompt Specification</label>
-                <textarea 
-                  className="w-full bg-black border border-border-dark rounded-2xl p-6 text-white text-lg focus:ring-1 focus:ring-primary focus:border-primary transition-all h-40 resize-none font-medium"
-                  placeholder="Describe the next turn of events... (e.g., 'A dense conversation about the heist')"
-                  value={aiPrompt}
-                  onChange={(e) => setAiPrompt(e.target.value)}
-                />
-              </div>
-
-              {history.length > 0 && (
-                <div>
-                  <label className="text-xs font-bold text-gray-400 uppercase tracking-widest block mb-4 px-1">Laboratory History</label>
-                  <div className="grid grid-cols-1 gap-2">
-                    {history.slice(0, 5).map(h => (
-                      <button 
-                        key={h.id}
-                        onClick={() => setAiPrompt(h.text)}
-                        className="text-left p-4 rounded-xl bg-black border border-border-dark hover:border-primary/50 text-gray-400 hover:text-white transition-all text-xs truncate font-medium flex items-center gap-3"
-                      >
-                        <span className="material-symbols-outlined text-sm text-gray-700">history</span>
-                        {h.text}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {error && <p className="text-red-500 text-xs mt-4 mb-2 font-bold uppercase tracking-widest">{error}</p>}
-
-            <div className="flex gap-4 pt-8">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/90 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="bg-surface-dark border border-border-dark rounded-[2.5rem] p-10 w-full max-w-2xl">
+            <h3 className="text-2xl font-bold text-white mb-8">AI Assistant</h3>
+            <textarea 
+              className="w-full bg-black border border-border-dark rounded-2xl p-6 text-white text-lg focus:ring-1 focus:ring-primary min-h-[160px]"
+              placeholder="Describe the draft turn..."
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+            />
+            <div className="flex gap-4 mt-8">
               <button 
                 onClick={handleAiDraft}
                 disabled={isGenerating || !aiPrompt.trim()}
-                className="flex-1 bg-primary disabled:bg-gray-800 disabled:text-gray-500 text-black font-bold py-5 rounded-2xl text-base transition-all active:scale-[0.98] shadow-lg shadow-primary/10 flex items-center justify-center gap-3"
+                className="flex-1 bg-primary disabled:bg-zinc-800 text-black font-bold py-5 rounded-2xl flex items-center justify-center gap-3"
               >
-                {isGenerating ? (
-                  <><span className="animate-spin material-symbols-outlined">progress_activity</span> Synthesizing Prose...</>
-                ) : (
-                  <><span className="material-symbols-outlined">magic_button</span> Generate Draft</>
-                )}
+                {isGenerating ? 'Synthesizing...' : 'Generate Draft'}
               </button>
-              <button 
-                onClick={() => setShowAiModal(false)}
-                className="px-8 bg-surface-hover hover:bg-white/10 text-white rounded-2xl font-bold transition-colors"
-              >
-                Dismiss
-              </button>
+              <button onClick={() => setShowAiModal(false)} className="px-8 bg-zinc-900 text-white rounded-2xl font-bold">Close</button>
             </div>
           </div>
         </div>

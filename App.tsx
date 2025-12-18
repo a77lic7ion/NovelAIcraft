@@ -77,12 +77,19 @@ const App: React.FC = () => {
   const activeProject = projects.find(p => p.id === activeProjectId) || projects[0];
 
   const updateProject = async (updatedProject: Project) => {
+    // Recalculate total word count
+    const totalWords = updatedProject.acts.reduce((sum, act) => 
+      sum + act.scenes.reduce((s, scene) => s + (scene.wordCount || 0), 0), 0
+    );
+    
+    const projectWithCorrectCount = { ...updatedProject, wordCount: totalWords };
+
     // Optimistic UI update
-    setProjects(prev => prev.map(p => p.id === updatedProject.id ? updatedProject : p));
+    setProjects(prev => prev.map(p => p.id === updatedProject.id ? projectWithCorrectCount : p));
     
     // Background DB save
     try {
-      await dbStorage.saveProject(updatedProject);
+      await dbStorage.saveProject(projectWithCorrectCount);
     } catch (e) {
       console.error("Database save error:", e);
     }
@@ -97,7 +104,8 @@ const App: React.FC = () => {
       wordCount: 0,
       acts: [{ id: 'act-1', title: 'Act 1', scenes: [] }],
       codex: [],
-      tags: tags || []
+      tags: tags || [],
+      printSize: 'A5'
     };
     
     try {
@@ -168,7 +176,7 @@ const App: React.FC = () => {
           />
         )}
         {currentView === View.REVIEW && activeProject && (
-          <Review project={activeProject} />
+          <Review project={activeProject} onUpdate={updateProject} />
         )}
         {currentView === View.SETTINGS && (
           <Settings config={config} onUpdateConfig={updateConfig} />

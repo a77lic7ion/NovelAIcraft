@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Project, CodexEntry } from '../types';
 import { callAI } from '../aiService';
 
@@ -14,6 +14,7 @@ const Codex: React.FC<CodexProps> = ({ project, onUpdate }) => {
   const [isScanning, setIsScanning] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [importText, setImportText] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const categories = ['All', 'Character', 'Location', 'Item', 'Lore'];
   const filteredEntries = filter === 'All' ? project.codex : project.codex.filter(e => e.type === filter);
@@ -50,60 +51,71 @@ const Codex: React.FC<CodexProps> = ({ project, onUpdate }) => {
     onUpdate({ ...project, codex: updatedCodex });
   };
 
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && editingEntry) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setEditingEntry({ ...editingEntry, image: reader.result as string });
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
   const handleScanManuscript = async () => {
     setIsScanning(true);
     const allContent = project.acts.flatMap(act => act.scenes.map(s => s.content)).join('\n\n');
-    const existingChars = project.codex.filter(e => e.type === 'Character').map(e => e.name).join(', ');
+    const existingChars = project.codex.filter(e => e.type === 'Character').map(e => `${e.name} (${e.isLocked ? 'LOCKED' : 'OPEN'})`).join(', ');
 
     try {
-      const prompt = `Based on the following manuscript content, identify all characters. For each character, provide their Role, Age, Appearance, Personality, and notable traits. 
-      Format your response as a valid JSON array of objects with the following keys: name, role, age, appearance, personality, background, traits.
-      Current manuscript content:
-      ${allContent.slice(0, 15000)}
+      const prompt = `Analyze the following manuscript and identify all characters.
+      Update details for existing characters if they are NOT locked.
+      Discover new characters and provide their role, traits, and background.
+      Return ONLY a JSON array of objects with keys: name, role, traits, background, age, appearance.
       
-      Existing characters known: ${existingChars}`;
+      Existing characters: ${existingChars}
+      Manuscript content:
+      ${allContent.slice(0, 15000)}`;
 
-      const systemInstruction = "You are a literary analyst. Extract precise character data from prose. Return ONLY a JSON array of objects. Do not include markdown code blocks, just the raw JSON.";
+      const systemInstruction = "You are a literary analyst. Return valid JSON only. If a character is marked LOCKED in the list provided, do not suggest updates for them, but you can still mention them in the context of others.";
 
       const result = await callAI(prompt, systemInstruction);
       const cleanedResult = result.replace(/```json|```/g, '').trim();
-      const extractedCharacters = JSON.parse(cleanedResult);
+      const extracted = JSON.parse(cleanedResult);
 
       let updatedCodex = [...project.codex];
       
-      extractedCharacters.forEach((char: any) => {
+      extracted.forEach((char: any) => {
         const existing = updatedCodex.find(e => e.name.toLowerCase() === char.name.toLowerCase() && e.type === 'Character');
         
         if (existing) {
           if (!existing.isLocked) {
-            // Update existing entry
             const index = updatedCodex.indexOf(existing);
             updatedCodex[index] = {
               ...existing,
               description: char.role || existing.description,
-              details: `Age: ${char.age || 'Unknown'}\nAppearance: ${char.appearance || 'Unknown'}\nPersonality: ${char.personality || 'Unknown'}\nBackground: ${char.background || 'Unknown'}`,
-              notes: `Traits: ${char.traits || 'None'}`
+              details: `Age: ${char.age}\nAppearance: ${char.appearance}\nBackground: ${char.background}`,
+              notes: `Traits: ${char.traits}`
             };
           }
         } else {
-          // Add new entry
           updatedCodex.push({
             id: Math.random().toString(36).substr(2, 9),
             name: char.name,
             type: 'Character',
             description: char.role || '',
-            details: `Age: ${char.age || 'Unknown'}\nAppearance: ${char.appearance || 'Unknown'}\nPersonality: ${char.personality || 'Unknown'}\nBackground: ${char.background || 'Unknown'}`,
-            notes: `Traits: ${char.traits || 'None'}`,
+            details: `Age: ${char.age || '?'}\nAppearance: ${char.appearance || '?'}\nBackground: ${char.background || '?'}`,
+            notes: `Traits: ${char.traits || '?'}`,
             isLocked: false
           });
         }
       });
 
       onUpdate({ ...project, codex: updatedCodex });
-      alert(`Scan complete. Analyzed ${extractedCharacters.length} characters.`);
+      alert("Laboratory Scan Complete. World context updated.");
     } catch (error) {
-      console.error("Scan failed:", error);
-      alert("AI Scan failed. Please check your AI configuration or manuscript size.");
+      console.error("Scan error:", error);
+      alert("AI Scan failed. Check connection or project size.");
     } finally {
       setIsScanning(false);
     }
@@ -112,18 +124,18 @@ const Codex: React.FC<CodexProps> = ({ project, onUpdate }) => {
   const handleManualImport = () => {
     if (!importText.trim()) return;
 
-    const lines = importText.split('\n');
+    const lines = importText.split('\n').filter(l => l.trim());
     const name = lines[0].trim();
     const data: Record<string, string> = {};
     
-    let currentKey = '';
+    let currentKey = 'Notes';
     lines.slice(1).forEach(line => {
       const match = line.match(/^([^:]+):(.*)$/);
       if (match) {
         currentKey = match[1].trim();
-        data[currentKey] = match[2].trim();
-      } else if (currentKey) {
-        data[currentKey] += '\n' + line.trim();
+        data[currentKey] = (data[currentKey] || '') + match[2].trim();
+      } else {
+        data[currentKey] = (data[currentKey] || '') + '\n' + line.trim();
       }
     });
 
@@ -132,15 +144,9 @@ const Codex: React.FC<CodexProps> = ({ project, onUpdate }) => {
       name: name,
       type: 'Character',
       description: data['Role'] || '',
-      details: Object.entries(data)
-        .filter(([k]) => ['Age', 'Appearance', 'Personality', 'Background', 'Character Arc'].includes(k))
-        .map(([k, v]) => `${k}: ${v}`)
-        .join('\n'),
-      notes: Object.entries(data)
-        .filter(([k]) => !['Role', 'Age', 'Appearance', 'Personality', 'Background', 'Character Arc'].includes(k))
-        .map(([k, v]) => `${k}:\n${v}`)
-        .join('\n\n'),
-      isLocked: false
+      details: `Age: ${data['Age'] || 'Unknown'}\nAppearance: ${data['Appearance'] || 'Unknown'}\nPersonality: ${data['Personality'] || 'Unknown'}\nBackground: ${data['Background'] || 'Unknown'}`,
+      notes: `Character Arc: ${data['Character Arc'] || 'None'}\n\nRelationships:\n${data['Key Relationships'] || 'None'}\n\nNotable Traits:\n${data['Notable Traits'] || 'None'}`,
+      isLocked: true // Default to locked for manual imports as they are high quality
     };
 
     onUpdate({ ...project, codex: [...project.codex, newEntry] });
@@ -159,41 +165,35 @@ const Codex: React.FC<CodexProps> = ({ project, onUpdate }) => {
               <button 
                 onClick={handleScanManuscript}
                 disabled={isScanning}
-                className={`flex items-center gap-2 h-9 px-4 rounded-full border transition-all text-xs font-bold uppercase tracking-widest ${
-                  isScanning ? 'bg-zinc-800 border-zinc-700 text-zinc-500' : 'bg-primary/10 border-primary/20 text-primary hover:bg-primary/20'
-                }`}
+                className="flex items-center gap-2 h-9 px-4 rounded-full border border-primary/20 bg-primary/5 text-primary text-xs font-bold uppercase tracking-widest hover:bg-primary/10 transition-all disabled:opacity-50"
               >
                 <span className={`material-symbols-outlined text-sm ${isScanning ? 'animate-spin' : ''}`}>
                   {isScanning ? 'sync' : 'psychology'}
                 </span>
-                {isScanning ? 'Analyzing...' : 'Scan Laboratory'}
+                {isScanning ? 'Scanning...' : 'Scan Lab'}
               </button>
               <button 
                 onClick={() => setShowImportModal(true)}
                 className="flex items-center gap-2 h-9 px-4 rounded-full border border-border-dark bg-surface-dark text-gray-400 hover:text-white transition-all text-xs font-bold uppercase tracking-widest"
               >
                 <span className="material-symbols-outlined text-sm">input</span>
-                Manual Import
+                Import Character
               </button>
             </div>
           </div>
-          <button 
-            onClick={handleAdd}
-            className="flex items-center gap-2 h-10 pl-3 pr-4 rounded-full bg-primary hover:bg-primary-dark text-black font-bold text-sm transition-all shadow-lg shadow-primary/20"
-          >
-            <span className="material-symbols-outlined">add</span>
+          <button onClick={handleAdd} className="h-10 px-6 rounded-full bg-primary text-black font-bold text-sm shadow-lg shadow-primary/20">
             New Entry
           </button>
         </header>
 
         <div className="p-6 overflow-y-auto">
-          <div className="flex gap-2 overflow-x-auto pb-4 sticky top-0 bg-black z-10">
+          <div className="flex gap-2 pb-4 overflow-x-auto">
             {categories.map(cat => (
               <button
                 key={cat}
                 onClick={() => setFilter(cat)}
                 className={`px-4 py-1.5 rounded-full text-sm font-medium transition-all ${
-                  filter === cat ? 'bg-primary text-black' : 'bg-surface-dark text-gray-500 border border-border-dark hover:text-white'
+                  filter === cat ? 'bg-primary text-black' : 'bg-surface-dark text-gray-500 border border-border-dark'
                 }`}
               >
                 {cat}
@@ -201,83 +201,94 @@ const Codex: React.FC<CodexProps> = ({ project, onUpdate }) => {
             ))}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4 pb-20">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-6 pb-24">
             {filteredEntries.map(entry => (
               <div 
                 key={entry.id}
                 onClick={() => setEditingEntry(entry)}
-                className={`p-5 bg-surface-dark border rounded-xl hover:border-primary/40 transition-all cursor-pointer group relative ${
-                  entry.isLocked ? 'border-blue-500/30 shadow-[0_0_15px_rgba(59,130,246,0.05)]' : 'border-border-dark'
+                className={`group flex flex-col bg-surface-dark border rounded-3xl overflow-hidden hover:border-primary/40 transition-all cursor-pointer relative ${
+                  entry.isLocked ? 'border-blue-500/30 shadow-[0_0_20px_rgba(59,130,246,0.05)]' : 'border-border-dark'
                 }`}
               >
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <span className={`text-[10px] font-bold uppercase tracking-wider ${entry.isLocked ? 'text-blue-400' : 'text-primary'}`}>
-                      {entry.type}
-                    </span>
+                <div className="aspect-[4/3] bg-black relative overflow-hidden">
+                  {entry.image ? (
+                    <img src={entry.image} alt={entry.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-zinc-800">
+                      <span className="material-symbols-outlined text-6xl">person_outline</span>
+                    </div>
+                  )}
+                  <div className="absolute top-4 right-4 flex gap-2">
                     {entry.isLocked && (
-                      <span className="material-symbols-outlined text-[14px] text-blue-500" title="Locked from AI updates">lock</span>
+                      <div className="bg-blue-500 text-white p-1.5 rounded-lg shadow-lg">
+                        <span className="material-symbols-outlined text-sm">lock</span>
+                      </div>
                     )}
                   </div>
-                  <button 
-                    onClick={(e) => toggleLock(e, entry.id)}
-                    className={`p-1 rounded-md transition-colors ${entry.isLocked ? 'text-blue-500 hover:bg-blue-500/10' : 'text-gray-700 hover:text-white hover:bg-white/5'}`}
-                    title={entry.isLocked ? "Unlock for AI updates" : "Lock from AI updates"}
-                  >
-                    <span className="material-symbols-outlined text-sm">{entry.isLocked ? 'lock' : 'lock_open'}</span>
-                  </button>
                 </div>
-                <h3 className="text-white font-bold mb-1 group-hover:text-primary transition-colors flex items-center gap-2">
-                  {entry.name}
-                </h3>
-                <p className="text-xs text-gray-500 line-clamp-2">{entry.description || 'No description provided.'}</p>
+                <div className="p-6">
+                  <span className="text-[10px] font-bold text-primary uppercase tracking-widest block mb-2">{entry.type}</span>
+                  <h3 className="text-xl font-bold text-white mb-2 group-hover:text-primary transition-colors">{entry.name}</h3>
+                  <p className="text-xs text-gray-500 line-clamp-2">{entry.description || 'No summary available.'}</p>
+                </div>
               </div>
             ))}
-            {filteredEntries.length === 0 && (
-              <div className="col-span-full py-20 text-center opacity-40">
-                <span className="material-symbols-outlined text-4xl mb-2">library_books</span>
-                <p>Codex is empty.</p>
-              </div>
-            )}
           </div>
         </div>
       </div>
 
       {editingEntry && (
-        <aside className="w-[450px] border-l border-border-dark bg-surface-dark flex flex-col shrink-0 z-[60] shadow-2xl overflow-y-auto animate-in slide-in-from-right duration-300">
-          <div className="h-[72px] flex items-center justify-between px-6 border-b border-border-dark sticky top-0 bg-surface-dark/95 backdrop-blur z-20">
-            <div className="flex items-center gap-3">
+        <aside className="w-[500px] border-l border-border-dark bg-surface-dark flex flex-col shrink-0 z-[100] animate-in slide-in-from-right duration-300">
+          <div className="h-[72px] flex items-center justify-between px-8 border-b border-border-dark bg-surface-dark/95 backdrop-blur-md sticky top-0 z-10">
+            <div className="flex items-center gap-4">
               <button 
                 onClick={(e) => toggleLock(e, editingEntry.id)}
-                className={`size-8 rounded-lg flex items-center justify-center transition-all ${
-                  editingEntry.isLocked ? 'bg-blue-500/20 text-blue-400' : 'bg-white/5 text-gray-500 hover:text-white'
-                }`}
-                title={editingEntry.isLocked ? "Unlock entry" : "Lock entry"}
+                className={`p-2 rounded-lg transition-all ${editingEntry.isLocked ? 'bg-blue-500/20 text-blue-400' : 'text-gray-500 hover:text-white'}`}
               >
-                <span className="material-symbols-outlined text-base">{editingEntry.isLocked ? 'lock' : 'lock_open'}</span>
+                <span className="material-symbols-outlined">{editingEntry.isLocked ? 'lock' : 'lock_open'}</span>
               </button>
-              <span className="text-gray-500 text-sm font-bold uppercase tracking-widest">Laboratory File</span>
+              <h3 className="font-bold text-white uppercase tracking-widest text-xs">Laboratory File</h3>
             </div>
-            <button onClick={() => setEditingEntry(null)} className="text-gray-500 hover:text-white transition-colors">
+            <button onClick={() => setEditingEntry(null)} className="text-gray-500 hover:text-white">
               <span className="material-symbols-outlined">close</span>
             </button>
           </div>
-          <div className="p-8 flex flex-col gap-8">
-            <div className="flex gap-6 items-start">
-              <div className="size-20 rounded-[1.5rem] bg-black border border-border-dark flex items-center justify-center text-primary shadow-xl">
-                <span className="material-symbols-outlined text-4xl">
-                  {editingEntry.type === 'Character' ? 'person' : editingEntry.type === 'Location' ? 'location_on' : 'category'}
-                </span>
+
+          <div className="flex-1 overflow-y-auto p-10 space-y-10">
+            {/* Image Section */}
+            <div className="space-y-4">
+              <div 
+                className="aspect-square bg-black border-2 border-dashed border-border-dark rounded-[2.5rem] flex flex-col items-center justify-center overflow-hidden cursor-pointer hover:border-primary/40 transition-all relative group"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {editingEntry.image ? (
+                  <>
+                    <img src={editingEntry.image} alt="Portrait" className="w-full h-full object-cover" />
+                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                      <span className="text-white font-bold text-sm uppercase">Change Illustration</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-4xl text-zinc-700 mb-2">add_photo_alternate</span>
+                    <span className="text-[10px] font-bold text-zinc-500 uppercase">Set Portrait</span>
+                  </>
+                )}
               </div>
-              <div className="flex-1 space-y-2">
+              <p className="text-[10px] text-center text-gray-600 font-bold uppercase tracking-widest">Resize for print: Automatic 1:1 Aspect</p>
+              <input type="file" ref={fileInputRef} hidden accept="image/*" onChange={handleImageUpload} />
+            </div>
+
+            <div className="space-y-6">
+              <div>
                 <input 
-                  className="w-full bg-transparent border-none text-3xl font-black text-white focus:ring-0 p-0 tracking-tight" 
+                  className="w-full bg-transparent border-none text-4xl font-black text-white focus:ring-0 p-0 mb-2"
                   value={editingEntry.name}
                   onChange={(e) => setEditingEntry({...editingEntry, name: e.target.value})}
-                  placeholder="Entry Name"
+                  placeholder="Subject Name"
                 />
                 <select 
-                  className="bg-black border-border-dark rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-primary focus:ring-primary/50"
+                  className="bg-black text-primary border-border-dark rounded-full px-4 py-1.5 text-[10px] font-black uppercase tracking-widest"
                   value={editingEntry.type}
                   onChange={(e) => setEditingEntry({...editingEntry, type: e.target.value as any})}
                 >
@@ -287,97 +298,74 @@ const Codex: React.FC<CodexProps> = ({ project, onUpdate }) => {
                   <option>Lore</option>
                 </select>
               </div>
-            </div>
 
-            <div className="space-y-6">
-              <div>
-                <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block mb-3 px-1">Role / Description</label>
-                <textarea 
-                  className="w-full bg-black border border-border-dark rounded-2xl p-4 text-sm text-white focus:ring-1 focus:ring-primary/50 transition-all resize-none" 
-                  rows={2}
-                  value={editingEntry.description}
-                  onChange={(e) => setEditingEntry({...editingEntry, description: e.target.value})}
-                  placeholder="Primary role in the story..."
-                />
-              </div>
-              <div>
-                <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block mb-3 px-1">Vital Details (Age, Appearance, etc.)</label>
-                <textarea 
-                  className="w-full bg-black border border-border-dark rounded-2xl p-4 text-sm text-gray-300 focus:ring-1 focus:ring-primary/50 transition-all font-serif leading-relaxed" 
-                  rows={6}
-                  value={editingEntry.details}
-                  onChange={(e) => setEditingEntry({...editingEntry, details: e.target.value})}
-                  placeholder="Physical description and life history..."
-                />
-              </div>
-              <div>
-                <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block mb-3 px-1">Laboratory Notes</label>
-                <textarea 
-                  className="w-full bg-black border border-border-dark rounded-2xl p-4 text-sm text-gray-400 focus:ring-1 focus:ring-primary/50 transition-all italic" 
-                  rows={5}
-                  value={editingEntry.notes}
-                  onChange={(e) => setEditingEntry({...editingEntry, notes: e.target.value})}
-                  placeholder="Relationships, traits, and arcs..."
-                />
+              <div className="space-y-6">
+                <div>
+                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block mb-2 px-1">Role & Purpose</label>
+                  <textarea 
+                    className="w-full bg-black border border-border-dark rounded-2xl p-5 text-sm text-white focus:ring-1 focus:ring-primary/40 resize-none"
+                    rows={2}
+                    value={editingEntry.description}
+                    onChange={(e) => setEditingEntry({...editingEntry, description: e.target.value})}
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block mb-2 px-1">Vital Details (Age, Appearance, etc.)</label>
+                  <textarea 
+                    className="w-full bg-black border border-border-dark rounded-2xl p-5 text-sm text-gray-300 focus:ring-1 focus:ring-primary/40 leading-relaxed font-serif"
+                    rows={6}
+                    value={editingEntry.details}
+                    onChange={(e) => setEditingEntry({...editingEntry, details: e.target.value})}
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block mb-2 px-1">Laboratory Notes & Arcs</label>
+                  <textarea 
+                    className="w-full bg-black border border-border-dark rounded-2xl p-5 text-sm text-gray-400 focus:ring-1 focus:ring-primary/40 leading-relaxed italic"
+                    rows={6}
+                    value={editingEntry.notes}
+                    onChange={(e) => setEditingEntry({...editingEntry, notes: e.target.value})}
+                  />
+                </div>
               </div>
             </div>
 
-            <div className="flex gap-4 pt-4">
-              <button 
-                onClick={saveEntry}
-                className="flex-1 bg-primary text-black font-bold py-4 rounded-2xl hover:brightness-110 transition-all active:scale-[0.98] shadow-lg shadow-primary/10"
-              >
-                Commit Changes
-              </button>
-              <button 
-                onClick={() => setEditingEntry(null)}
-                className="px-6 bg-surface-hover text-white rounded-2xl font-bold transition-colors"
-              >
-                Dismiss
-              </button>
-            </div>
+            <button 
+              onClick={saveEntry}
+              className="w-full bg-primary text-black font-black py-5 rounded-2xl shadow-xl shadow-primary/10 transition-all active:scale-[0.98]"
+            >
+              COMMIT TO LABORATORY
+            </button>
           </div>
         </aside>
       )}
 
       {showImportModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/90 backdrop-blur-xl animate-in fade-in duration-300">
-          <div className="w-full max-w-2xl bg-surface-dark border border-border-dark rounded-[2.5rem] p-10 shadow-[0_0_100px_rgba(43,238,121,0.05)]">
-            <div className="flex items-center justify-between mb-8">
-              <div className="flex items-center gap-4">
-                <div className="size-12 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">
-                  <span className="material-symbols-outlined text-2xl">file_import</span>
-                </div>
-                <div>
-                  <h2 className="text-2xl font-bold text-white">Manual Character Import</h2>
-                  <p className="text-gray-500 text-xs">Paste your structured character data below.</p>
-                </div>
-              </div>
-              <button onClick={() => setShowImportModal(false)} className="text-gray-500 hover:text-white">
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </div>
-
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-8 bg-black/95 backdrop-blur-2xl animate-in fade-in duration-300">
+          <div className="w-full max-w-2xl bg-surface-dark border border-border-dark rounded-[3rem] p-12 shadow-[0_0_100px_rgba(43,238,121,0.05)]">
+            <h2 className="text-3xl font-black text-white mb-2">Character Protocol Import</h2>
+            <p className="text-gray-500 text-sm mb-8">Paste your structured data. The system will auto-parse fields like Role, Age, and Arc.</p>
+            
             <textarea 
-              className="w-full h-80 bg-black border border-border-dark rounded-2xl p-6 text-white text-sm focus:ring-1 focus:ring-primary focus:border-primary transition-all font-mono leading-relaxed overflow-y-auto"
-              placeholder="Name&#10;Role: Protagonist&#10;Age: 22&#10;Appearance: Tall, dark hair...&#10;Notable Traits: Determined..."
+              className="w-full h-96 bg-black border border-border-dark rounded-3xl p-8 text-white text-sm focus:ring-1 focus:ring-primary font-mono leading-relaxed"
+              placeholder="Name&#10;Role: Protagonist&#10;Age: 22&#10;Character Arc: Starts weak, ends strong...&#10;Key Relationships: ..."
               value={importText}
               onChange={(e) => setImportText(e.target.value)}
             />
 
-            <div className="flex gap-4 mt-8">
+            <div className="flex gap-4 mt-10">
               <button 
                 onClick={handleManualImport}
                 disabled={!importText.trim()}
-                className="flex-1 bg-primary disabled:bg-gray-800 disabled:text-gray-500 text-black font-bold py-4 rounded-2xl transition-all shadow-lg shadow-primary/10"
+                className="flex-1 bg-primary disabled:bg-zinc-800 text-black font-black py-4 rounded-2xl shadow-lg transition-all"
               >
-                Initialize Character
+                INITIALIZE SUBJECT
               </button>
               <button 
                 onClick={() => setShowImportModal(false)}
-                className="px-8 bg-surface-hover border border-border-dark text-white font-bold rounded-2xl transition-colors"
+                className="px-8 bg-zinc-900 text-white font-bold rounded-2xl"
               >
-                Cancel
+                CANCEL
               </button>
             </div>
           </div>

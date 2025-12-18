@@ -16,6 +16,7 @@ const Editor: React.FC<EditorProps> = ({ project, sceneId, onUpdate, onBack, his
   const [scene, setScene] = useState<Scene | null>(null);
   const [aiPrompt, setAiPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isGeneratingSynopsis, setIsGeneratingSynopsis] = useState(false);
   const [showAiModal, setShowAiModal] = useState(false);
   const [error, setError] = useState('');
 
@@ -58,6 +59,24 @@ const Editor: React.FC<EditorProps> = ({ project, sceneId, onUpdate, onBack, his
     }
   };
 
+  const handleGenerateSynopsis = async () => {
+    if (!scene || !scene.content.trim()) return;
+    setIsGeneratingSynopsis(true);
+    try {
+      const result = await callAI(
+        `Generate a concise one-sentence synopsis for the following scene content: \n\n${scene.content}`,
+        "You are an expert literary editor. Provide only the synopsis text without quotes or preamble."
+      );
+      if (result) {
+        saveScene({ synopsis: result.trim() });
+      }
+    } catch (e) {
+      console.error("Failed to generate synopsis:", e);
+    } finally {
+      setIsGeneratingSynopsis(false);
+    }
+  };
+
   if (!scene) return <div className="p-8 text-gray-500">Select a scene to start writing...</div>;
 
   return (
@@ -90,16 +109,41 @@ const Editor: React.FC<EditorProps> = ({ project, sceneId, onUpdate, onBack, his
       </header>
 
       <div className="flex-1 overflow-y-auto w-full relative">
-        <div className="max-w-3xl mx-auto py-20 px-8 min-h-full flex flex-col gap-10 relative z-10">
-          <input 
-            className="bg-transparent text-5xl font-black text-white placeholder-zinc-800 border-none focus:ring-0 p-0 w-full tracking-tight"
-            value={scene.title}
-            onChange={(e) => saveScene({ title: e.target.value })}
-            placeholder="Untitled Scene"
-          />
+        <div className="max-w-3xl mx-auto py-20 px-8 min-h-full flex flex-col gap-8 relative z-10">
+          <div className="flex flex-col gap-6">
+            <input 
+              className="bg-transparent text-5xl font-black text-white placeholder-zinc-800 border-none focus:ring-0 p-0 w-full tracking-tight"
+              value={scene.title}
+              onChange={(e) => saveScene({ title: e.target.value })}
+              placeholder="Untitled Scene"
+            />
+
+            <div className="flex flex-col gap-2">
+              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest px-1 flex justify-between items-center">
+                <span>Synopsis</span>
+                <button 
+                  onClick={handleGenerateSynopsis}
+                  disabled={isGeneratingSynopsis || !scene.content.trim()}
+                  className="text-primary hover:text-white transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed group"
+                >
+                  <span className={`material-symbols-outlined text-sm ${isGeneratingSynopsis ? 'animate-spin' : ''}`}>
+                    {isGeneratingSynopsis ? 'progress_activity' : 'auto_fix'}
+                  </span>
+                  <span className="text-[9px]">{isGeneratingSynopsis ? 'Generating...' : 'AI Generate'}</span>
+                </button>
+              </label>
+              <textarea 
+                className="bg-surface-dark border border-border-dark rounded-xl px-4 py-3 text-sm text-gray-300 focus:ring-1 focus:ring-primary focus:border-primary transition-all w-full resize-none min-h-[60px]"
+                value={scene.synopsis}
+                onChange={(e) => saveScene({ synopsis: e.target.value })}
+                placeholder="Briefly describe what happens in this scene..."
+                rows={2}
+              />
+            </div>
+          </div>
           
           <textarea
-            className="flex-1 bg-transparent border-none focus:ring-0 p-0 text-xl text-zinc-300 leading-relaxed font-serif min-h-[600px] resize-none selection:bg-primary/30"
+            className="flex-1 bg-transparent border-none focus:ring-0 p-0 text-xl text-zinc-300 leading-relaxed font-serif min-h-[600px] resize-none selection:bg-primary/30 mt-4"
             value={scene.content}
             onChange={(e) => {
               const text = e.target.value;

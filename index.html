@@ -37,8 +37,12 @@
         }
     </script>
     <style>
-        /* Standard Scrollbar Styling */
-        * { scrollbar-width: thin; scrollbar-color: #27272a transparent; }
+        /* Modern Scrollbar Styling */
+        :root {
+            scrollbar-width: thin;
+            scrollbar-color: #27272a transparent;
+        }
+        
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 10px; }
@@ -48,14 +52,11 @@
             background-color: #000; 
             color: #fff; 
             font-family: 'Spline Sans', sans-serif;
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
         }
 
         .glass-panel { 
             background: rgba(18, 18, 18, 0.7); 
             backdrop-filter: blur(20px); 
-            -webkit-backdrop-filter: blur(20px);
         }
 
         .material-symbols-outlined { 
@@ -63,9 +64,6 @@
             display: inline-block;
             vertical-align: middle;
         }
-
-        /* Prevent layout shift during font load */
-        .font-display { font-family: 'Spline Sans', system-ui, sans-serif; }
     </style>
 
     <script type="importmap">
@@ -81,6 +79,5 @@
 </head>
 <body class="selection:bg-primary selection:text-black h-screen overflow-hidden">
     <div id="root"></div>
-    <!-- The index.tsx is automatically loaded as a module by the platform -->
 </body>
 </html>

@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Project, Scene, PromptLog } from '../types';
 import { callAI } from '../aiService';
 
@@ -14,18 +14,50 @@ interface EditorProps {
 
 const Editor: React.FC<EditorProps> = ({ project, sceneId, onUpdate, onBack, history, onPromptUse }) => {
   const [scene, setScene] = useState<Scene | null>(null);
+  const [localContent, setLocalContent] = useState('');
   const [aiPrompt, setAiPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [isGeneratingSynopsis, setIsGeneratingSynopsis] = useState(false);
   const [showAiModal, setShowAiModal] = useState(false);
   const [error, setError] = useState('');
+  
+  const syncTimeoutRef = useRef<number | null>(null);
 
+  // Load scene data once when sceneId changes or first load
   useEffect(() => {
     const s = project.acts.flatMap(a => a.scenes).find(s => s.id === sceneId);
-    if (s) setScene(s);
+    if (s && (!scene || s.id !== scene.id)) {
+      setScene(s);
+      setLocalContent(s.content);
+    }
   }, [sceneId, project]);
 
-  const saveScene = (updates: Partial<Scene>) => {
+  // Debounced Sync back to global project state
+  const debouncedSync = (content: string, updates: Partial<Scene> = {}) => {
+    if (syncTimeoutRef.current) window.clearTimeout(syncTimeoutRef.current);
+    
+    syncTimeoutRef.current = window.setTimeout(() => {
+      if (!scene) return;
+      
+      const wordCount = content.trim() ? content.split(/\s+/).length : 0;
+      const updatedScene = { ...scene, content, wordCount, ...updates };
+      
+      const updatedActs = project.acts.map(act => ({
+        ...act,
+        scenes: act.scenes.map(s => s.id === scene.id ? updatedScene : s)
+      }));
+      
+      onUpdate({ ...project, acts: updatedActs, lastEdited: Date.now() });
+    }, 500); // Sync every 500ms of silence
+  };
+
+  const handleContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const text = e.target.value;
+    setLocalContent(text);
+    debouncedSync(text);
+  };
+
+  const saveSceneTitleOrSynopsis = (updates: Partial<Scene>) => {
     if (!scene) return;
     const newScene = { ...scene, ...updates };
     setScene(newScene);
@@ -45,10 +77,12 @@ const Editor: React.FC<EditorProps> = ({ project, sceneId, onUpdate, onBack, his
     try {
       const draft = await callAI(
         `Draft the following for my scene in the novel "${project.title}": ${aiPrompt}`,
-        `You are a world-class novelist. Use immersive, high-quality prose. Current scene context: ${scene?.content.slice(-1000)}`
+        `You are a world-class novelist. Use immersive, high-quality prose. Current scene context: ${localContent.slice(-1000)}`
       );
       if (draft) {
-        saveScene({ content: (scene?.content || '') + '\n\n' + draft });
+        const newContent = localContent + '\n\n' + draft;
+        setLocalContent(newContent);
+        debouncedSync(newContent);
         setShowAiModal(false);
         setAiPrompt('');
       }
@@ -60,15 +94,15 @@ const Editor: React.FC<EditorProps> = ({ project, sceneId, onUpdate, onBack, his
   };
 
   const handleGenerateSynopsis = async () => {
-    if (!scene || !scene.content.trim()) return;
+    if (!localContent.trim()) return;
     setIsGeneratingSynopsis(true);
     try {
       const result = await callAI(
-        `Generate a concise one-sentence synopsis for the following scene content: \n\n${scene.content}`,
+        `Generate a concise one-sentence synopsis for the following scene content: \n\n${localContent}`,
         "You are an expert literary editor. Provide only the synopsis text without quotes or preamble."
       );
       if (result) {
-        saveScene({ synopsis: result.trim() });
+        saveSceneTitleOrSynopsis({ synopsis: result.trim() });
       }
     } catch (e) {
       console.error("Failed to generate synopsis:", e);
@@ -78,6 +112,8 @@ const Editor: React.FC<EditorProps> = ({ project, sceneId, onUpdate, onBack, his
   };
 
   if (!scene) return <div className="p-8 text-gray-500">Select a scene to start writing...</div>;
+
+  const currentWordCount = localContent.trim() ? localContent.split(/\s+/).length : 0;
 
   return (
     <div className="flex-1 flex flex-col h-full bg-black relative">
@@ -114,7 +150,7 @@ const Editor: React.FC<EditorProps> = ({ project, sceneId, onUpdate, onBack, his
             <input 
               className="bg-transparent text-5xl font-black text-white placeholder-zinc-800 border-none focus:ring-0 p-0 w-full tracking-tight"
               value={scene.title}
-              onChange={(e) => saveScene({ title: e.target.value })}
+              onChange={(e) => saveSceneTitleOrSynopsis({ title: e.target.value })}
               placeholder="Untitled Scene"
             />
 
@@ -123,7 +159,7 @@ const Editor: React.FC<EditorProps> = ({ project, sceneId, onUpdate, onBack, his
                 <span>Synopsis</span>
                 <button 
                   onClick={handleGenerateSynopsis}
-                  disabled={isGeneratingSynopsis || !scene.content.trim()}
+                  disabled={isGeneratingSynopsis || !localContent.trim()}
                   className="text-primary hover:text-white transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed group"
                 >
                   <span className={`material-symbols-outlined text-sm ${isGeneratingSynopsis ? 'animate-spin' : ''}`}>
@@ -135,7 +171,7 @@ const Editor: React.FC<EditorProps> = ({ project, sceneId, onUpdate, onBack, his
               <textarea 
                 className="bg-surface-dark border border-border-dark rounded-xl px-4 py-3 text-sm text-gray-300 focus:ring-1 focus:ring-primary focus:border-primary transition-all w-full resize-none min-h-[60px]"
                 value={scene.synopsis}
-                onChange={(e) => saveScene({ synopsis: e.target.value })}
+                onChange={(e) => saveSceneTitleOrSynopsis({ synopsis: e.target.value })}
                 placeholder="Briefly describe what happens in this scene..."
                 rows={2}
               />
@@ -144,11 +180,8 @@ const Editor: React.FC<EditorProps> = ({ project, sceneId, onUpdate, onBack, his
           
           <textarea
             className="flex-1 bg-transparent border-none focus:ring-0 p-0 text-xl text-zinc-300 leading-relaxed font-serif min-h-[600px] resize-none selection:bg-primary/30 mt-4"
-            value={scene.content}
-            onChange={(e) => {
-              const text = e.target.value;
-              saveScene({ content: text, wordCount: text.trim() ? text.split(/\s+/).length : 0 });
-            }}
+            value={localContent}
+            onChange={handleContentChange}
             placeholder="Begin your masterpiece..."
           />
         </div>
@@ -158,16 +191,16 @@ const Editor: React.FC<EditorProps> = ({ project, sceneId, onUpdate, onBack, his
         <div className="flex items-center gap-8">
           <span className="flex items-center gap-2">
             <span className="material-symbols-outlined text-sm">sticky_note_2</span>
-            {scene.wordCount} Words
+            {currentWordCount} Words
           </span>
           <span className="flex items-center gap-2">
             <span className="material-symbols-outlined text-sm">timer</span>
-            ${~~(scene.wordCount / 200)}m Reading
+            ${~~(currentWordCount / 200)}m Reading
           </span>
         </div>
         <div className="flex items-center gap-2">
           <span className="animate-pulse w-1.5 h-1.5 rounded-full bg-primary"></span>
-          <span>Synced with cloud</span>
+          <span>Studio Active</span>
         </div>
       </footer>
 

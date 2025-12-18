@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Project, User, AIConfig, PromptLog } from './types';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
@@ -25,6 +25,8 @@ const App: React.FC = () => {
     ollamaModel: 'llama3',
     prefetch: true
   });
+
+  const saveTimeoutRef = useRef<number | null>(null);
 
   // Load user session
   useEffect(() => {
@@ -52,11 +54,22 @@ const App: React.FC = () => {
     }
   }, [currentUser]);
 
-  // Persistence
+  // Debounced Persistence
   useEffect(() => {
     if (currentUser && projects.length >= 0) {
-      localStorage.setItem(`novel-craft-projects-${currentUser.id}`, JSON.stringify(projects));
+      if (saveTimeoutRef.current) window.clearTimeout(saveTimeoutRef.current);
+      
+      saveTimeoutRef.current = window.setTimeout(() => {
+        try {
+          localStorage.setItem(`novel-craft-projects-${currentUser.id}`, JSON.stringify(projects));
+        } catch (e) {
+          console.error("Storage Error:", e);
+        }
+      }, 1000); // 1 second debounce for saving
     }
+    return () => {
+      if (saveTimeoutRef.current) window.clearTimeout(saveTimeoutRef.current);
+    };
   }, [projects, currentUser]);
 
   const handleLogout = () => {

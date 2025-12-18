@@ -1,7 +1,7 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AIConfig } from '../types';
-import { testOllama } from '../aiService';
+import { testOllama, fetchOllamaModels } from '../aiService';
 
 interface SettingsProps {
   config: AIConfig;
@@ -10,6 +10,7 @@ interface SettingsProps {
 
 const Settings: React.FC<SettingsProps> = ({ config, onUpdateConfig }) => {
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'fail'>('idle');
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [exportSettings, setExportSettings] = useState({
     includeCodex: true,
     fontFamily: 'Serif',
@@ -17,10 +18,31 @@ const Settings: React.FC<SettingsProps> = ({ config, onUpdateConfig }) => {
     professionalBleed: false
   });
 
+  // Automatically attempt to fetch models if provider is Ollama on mount or endpoint change
+  useEffect(() => {
+    if (config.provider === 'ollama') {
+      refreshOllamaModels();
+    }
+  }, [config.ollamaEndpoint]);
+
+  const refreshOllamaModels = async () => {
+    const models = await fetchOllamaModels(config.ollamaEndpoint);
+    setOllamaModels(models);
+    // If current selected model is not in the list and list is not empty, select the first one
+    if (models.length > 0 && !models.includes(config.ollamaModel)) {
+      onUpdateConfig({ ...config, ollamaModel: models[0] });
+    }
+  };
+
   const handleTest = async () => {
     setTestStatus('testing');
     const ok = await testOllama(config.ollamaEndpoint);
-    setTestStatus(ok ? 'success' : 'fail');
+    if (ok) {
+      setTestStatus('success');
+      await refreshOllamaModels();
+    } else {
+      setTestStatus('fail');
+    }
     setTimeout(() => setTestStatus('idle'), 3000);
   };
 
@@ -85,21 +107,42 @@ const Settings: React.FC<SettingsProps> = ({ config, onUpdateConfig }) => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
                     <label className="text-xs font-bold text-gray-400 uppercase tracking-widest block mb-3 px-1">Ollama Endpoint</label>
-                    <input 
-                      className="w-full bg-black border border-border-dark rounded-xl p-4 text-white focus:ring-1 focus:ring-primary transition-all font-mono text-sm"
-                      placeholder="http://localhost:11434"
-                      value={config.ollamaEndpoint}
-                      onChange={(e) => onUpdateConfig({...config, ollamaEndpoint: e.target.value})}
-                    />
+                    <div className="relative">
+                      <input 
+                        className="w-full bg-black border border-border-dark rounded-xl p-4 text-white focus:ring-1 focus:ring-primary transition-all font-mono text-sm pr-12"
+                        placeholder="http://localhost:11434"
+                        value={config.ollamaEndpoint}
+                        onChange={(e) => onUpdateConfig({...config, ollamaEndpoint: e.target.value})}
+                      />
+                      <button 
+                        onClick={refreshOllamaModels}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-primary transition-colors"
+                        title="Refresh models"
+                      >
+                        <span className="material-symbols-outlined text-xl">refresh</span>
+                      </button>
+                    </div>
                   </div>
                   <div>
                     <label className="text-xs font-bold text-gray-400 uppercase tracking-widest block mb-3 px-1">Target Model</label>
-                    <input 
-                      className="w-full bg-black border border-border-dark rounded-xl p-4 text-white focus:ring-1 focus:ring-primary transition-all font-mono text-sm"
-                      placeholder="llama3"
-                      value={config.ollamaModel}
-                      onChange={(e) => onUpdateConfig({...config, ollamaModel: e.target.value})}
-                    />
+                    {ollamaModels.length > 0 ? (
+                      <select 
+                        className="w-full bg-black border border-border-dark rounded-xl p-4 text-white focus:ring-1 focus:ring-primary transition-all font-mono text-sm appearance-none"
+                        value={config.ollamaModel}
+                        onChange={(e) => onUpdateConfig({...config, ollamaModel: e.target.value})}
+                      >
+                        {ollamaModels.map(m => (
+                          <option key={m} value={m}>{m}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input 
+                        className="w-full bg-black border border-border-dark rounded-xl p-4 text-white focus:ring-1 focus:ring-primary transition-all font-mono text-sm"
+                        placeholder="llama3"
+                        value={config.ollamaModel}
+                        onChange={(e) => onUpdateConfig({...config, ollamaModel: e.target.value})}
+                      />
+                    )}
                   </div>
                 </div>
 
@@ -115,6 +158,7 @@ const Settings: React.FC<SettingsProps> = ({ config, onUpdateConfig }) => {
                       {testStatus === 'testing' ? 'Connecting...' : testStatus === 'success' ? 'Connected' : testStatus === 'fail' ? 'Failed' : 'Test Connection'}
                     </button>
                     {testStatus === 'success' && <span className="text-green-500 text-[10px] font-bold animate-pulse uppercase">Endpoint reached</span>}
+                    {testStatus === 'fail' && <span className="text-red-500 text-[10px] font-bold uppercase">Connection Refused</span>}
                   </div>
                   
                   <div className="flex items-center gap-3">

@@ -76,3 +76,14 @@ export const testOllama = async (endpoint: string) => {
     return false;
   }
 };
+
+export const fetchOllamaModels = async (endpoint: string): Promise<string[]> => {
+  try {
+    const res = await fetch(`${endpoint}/api/tags`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.models?.map((m: any) => m.name) || [];
+  } catch {
+    return [];
+  }
+};

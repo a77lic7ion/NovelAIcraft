@@ -63,6 +63,7 @@ export interface CodexEntry {
   description: string;
   details: string;
   notes: string;
+  isLocked?: boolean;
 }
 
 export interface ChatMessage {
